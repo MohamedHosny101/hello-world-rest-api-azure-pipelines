@@ -1,68 +1,630 @@
-# Maven package Java project Web App to Linux on Azure
-# Build your Java project and deploy it to Azure as a Linux web app
-# Add steps that analyze code, save build artifacts, deploy, and more:
-# https://docs.microsoft.com/azure/devops/pipelines/languages/java
-
-trigger:
-- master
-
-variables:
-
-  # Azure Resource Manager connection created during pipeline creation
-  azureSubscription: '7fd534cc-e6c0-4ffb-824d-9304c2323df8'
-  
-  # Web app name
-  webAppName: 'hello-world-rest-api-in28minutes'
-
-  # Environment name
-  environmentName: 'hello-world-rest-api-in28minutes'
-  
-  # Agent VM image name
-  vmImageName: 'ubuntu-latest'
-
 stages:
-- stage: Build
-  displayName: Build stage
+- stage: SecurityScan
+  displayName: 'GitLeaks Security Scanning'
   jobs:
-  - job: MavenPackageAndPublishArtifacts
-    displayName: Maven Package and Publish Artifacts
+  - job: GitLeaksScan
+    displayName: 'Run GitLeaks Security Scan'
     pool:
-      vmImage: $(vmImageName)
+      vmImage: 'ubuntu-latest'
     
     steps:
-    - task: Maven@3
-      displayName: 'Maven Package'
+    - task: CmdLine@2
+      displayName: 'Install GitLeaks'
       inputs:
-        mavenPomFile: 'pom.xml'
+        script: |
+          # Install GitLeaks
+          wget https://github.com/zricethezav/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz
+          tar xzf gitleaks_8.18.0_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
+          chmod +x /usr/local/bin/gitleaks
+          gitleaks version
 
-    - task: CopyFiles@2
-      displayName: 'Copy Files to artifact staging directory'
+    - task: Bash@3
+      displayName: 'Create Enhanced GitLeaks Configuration'
       inputs:
-        SourceFolder: '$(System.DefaultWorkingDirectory)'
-        Contents: '**/target/*.?(war|jar)'
-        TargetFolder: $(Build.ArtifactStagingDirectory)
+        targetType: 'inline'
+        script: |
+          cat > .gitleaks.toml << 'EOF'
+          title = "Enhanced gitleaks config for Multi-Tech Stack"
+          
+          # ========== BASE SECRETS (Existing) ==========
+          [[rules]]
+          description = "Private Key"
+          regex = '''-----BEGIN PRIVATE KEY-----'''
+          tags = ["key", "PK"]
+          
+          [[rules]]
+          description = "Certificate"
+          regex = '''-----BEGIN CERTIFICATE-----'''
+          tags = ["certificate"]
+          
+          [[rules]]
+          description = "SSH Private Key"
+          regex = '''-----BEGIN OPENSSH PRIVATE KEY-----'''
+          tags = ["key", "SSH"]
+          
+          [[rules]]
+          description = "RSA Private Key"
+          regex = '''-----BEGIN RSA PRIVATE KEY-----'''
+          tags = ["key", "RSA"]
+          
+          [[rules]]
+          description = "API Key Generic"
+          regex = '''(?i)(api[_-]?key|apikey)[\s]*[=:][\s]*["']?[A-Za-z0-9_\-]{20,}["']?'''
+          tags = ["key", "API"]
+          
+          [[rules]]
+          description = "Password in URL"
+          regex = '''[a-zA-Z]{3,10}://[^/\\s:@]{3,20}:[^/\\s:@]{3,20}@.{1,100}[\"'\\s]'''
+          tags = ["password", "URL"]
+          
+          [[rules]]
+          description = "GitHub Token"
+          regex = '''(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36}'''
+          tags = ["key", "GitHub"]
+          
+          [[rules]]
+          description = "Generic Secret"
+          regex = '''(?i)(secret|SECRET)[\s]*[=:][\s]*["'][^"']{10,}["']'''
+          tags = ["key", "secret"]
+          
+          [[rules]]
+          description = "Password Assignment"
+          regex = '''(?i)(password|PASSWORD)[\s]*[=:][\s]*["'][^"']{6,}["']'''
+          tags = ["password"]
+          
+          [[rules]]
+          description = "JWT Token"
+          regex = '''eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*'''
+          tags = ["token", "JWT"]
+          
+          # ========== ANGULAR / FRONTEND ==========
+          [[rules]]
+          description = "Angular Environment Secrets"
+          regex = '''(?i)(apiUrl|baseUrl|authUrl|firebase|googleMaps|stripe)[\s]*[:=][\s]*["'][^"']{10,}["']'''
+          tags = ["Angular", "frontend", "config"]
+          
+          [[rules]]
+          description = "Firebase Configuration"
+          regex = '''(?i)firebaseConfig[\s]*[:=][\s]*\{[^}]*apiKey[\s]*:[\s]*["'][^"']{20,}["']'''
+          tags = ["Firebase", "Angular", "Flutter", "mobile"]
+          
+          # ========== JAVA / SPRING BOOT ==========
+          [[rules]]
+          description = "Spring Boot application.properties/yml secrets"
+          regex = '''(?i)(spring\.datasource\.password|spring\.security\.oauth2\.client\.secret|jwt\.secret|management\.endpoint\.secret|key|secret|password)[\s]*[=:][\s]*["']?[^"'\s]{8,}["']?'''
+          tags = ["SpringBoot", "Java", "config"]
+          
+          [[rules]]
+          description = "Java KeyStore Passwords"
+          regex = '''(?i)(keyStorePassword|trustStorePassword|keyPassword)[\s]*[=:][\s]*["'][^"']{6,}["']'''
+          tags = ["Java", "SSL", "keystore"]
+          
+          [[rules]]
+          description = "Spring Cloud Config"
+          regex = '''(?i)encrypt\.key[\s]*[=:][\s]*["'][^"']{8,}["']'''
+          tags = ["SpringCloud", "encryption"]
+          
+          # ========== QUARKUS ==========
+          [[rules]]
+          description = "Quarkus Configuration Secrets"
+          regex = '''(?i)(quarkus\.datasource\.password|quarkus\.oidc\.credentials\.secret|quarkus\.http\.auth\.basic|%prod\.|%dev\.).*[\s]*[=:][\s]*["'][^"']{8,}["']'''
+          tags = ["Quarkus", "Java", "config"]
+          
+          [[rules]]
+          description = "Quarkus Vault Secrets"
+          regex = '''(?i)quarkus\.vault\..*[\s]*[=:][\s]*["'][^"']{8,}["']'''
+          tags = ["Quarkus", "Vault", "secret"]
+          
+          # ========== DART / FLUTTER ==========
+          [[rules]]
+          description = "Flutter Dart Secrets"
+          regex = '''(?i)(const String.*(ApiKey|Secret|Password|Token)|static const.*=.*["'][^"']{10,}["'])'''
+          tags = ["Flutter", "Dart", "mobile"]
+          
+          [[rules]]
+          description = "Flutter Environment Variables"
+          regex = '''(?i)(--dart-define=.*[=:][\s]*["'][^"']{10,}["'])'''
+          tags = ["Flutter", "Dart", "build"]
+          
+          # ========== OPENSHIFT / KUBERNETES ==========
+          [[rules]]
+          description = "OpenShift/K8s Secrets in YAML"
+          regex = '''(?i)(kind:\s*Secret[\s\S]*?(password|token|key|cert|secret)[\s]*:[\s]*["']?[^"'\s]{8,}["']?)'''
+          tags = ["OpenShift", "Kubernetes", "Secret"]
+          
+          [[rules]]
+          description = "Base64 Encoded Secrets"
+          regex = '''[\s]*(password|token|key|secret|cert):[\s]*["']?[A-Za-z0-9+/]{20,}={0,2}["']?'''
+          tags = ["Base64", "encoded", "secret"]
+          
+          [[rules]]
+          description = "OpenShift Route/Service Tokens"
+          regex = '''(?i)(openshift-token|sa-token|service-account-token)[\s]*:[\s]*["'][^"']{20,}["']'''
+          tags = ["OpenShift", "token", "service"]
+          
+          # ========== DATABASE CONNECTIONS ==========
+          [[rules]]
+          description = "Database Connection Strings"
+          regex = '''(?i)(jdbc:|mongodb:|postgresql:|mysql:).*://.*:.*@'''
+          tags = ["database", "connection", "credentials"]
+          
+          [[rules]]
+          description = "MongoDB Connection String"
+          regex = '''mongodb(\+srv)?://[^:]+:[^@]+@'''
+          tags = ["MongoDB", "database"]
+          
+          # ========== ORACLE DATABASE ==========
+          [[rules]]
+          description = "Oracle JDBC Connection String"
+          regex = '''jdbc:oracle:thin:.*/.*@'''
+          tags = ["Oracle", "database", "JDBC"]
+          
+          [[rules]]
+          description = "Oracle Wallet Password"
+          regex = '''(?i)(oracle\.wallet\.password|oracle\.net\.wallet_password)[\s]*[=:][\s]*["'][^"']{6,}["']'''
+          tags = ["Oracle", "wallet", "password"]
+          
+          [[rules]]
+          description = "Oracle TNS Connection"
+          regex = '''\(DESCRIPTION=.*\(PASSWORD=[^)]+\)'''
+          tags = ["Oracle", "TNS", "connection"]
+          
+          [[rules]]
+          description = "Oracle SQL*Net Configuration"
+          regex = '''(?i)sqlnet\.ora.*(password|secret)[\s]*[=:][\s]*["'][^"']{6,}["']'''
+          tags = ["Oracle", "SQL*Net", "configuration"]
+          
+          [[rules]]
+          description = "Oracle Data Source Password"
+          regex = '''(?i)(DataSource|ConnectionPool).*\.password[^;]{6,}'''
+          tags = ["Oracle", "DataSource", "password"]
+          
+          # ========== ANDROID / MOBILE ==========
+          [[rules]]
+          description = "Android Keystore Passwords"
+          regex = '''(?i)(storePassword|keyPassword|keyAlias)[\s]*[=:][\s]*["'][^"']{6,}["']'''
+          tags = ["Android", "keystore", "mobile", "signing"]
+          
+          [[rules]]
+          description = "Android Gradle Properties"
+          regex = '''(?i)(signingConfigs|releaseSigningConfig).*[\s\S]*?storePassword.*["'][^"']{6,}["']'''
+          tags = ["Android", "Gradle", "signing"]
+          
+          [[rules]]
+          description = "Android Google Services JSON"
+          regex = '''"project_info".*"firebase_url".*["'][^"']{20,}["']'''
+          tags = ["Android", "Firebase", "Google", "mobile"]
+          
+          [[rules]]
+          description = "Android API Keys in Manifest"
+          regex = '''<meta-data.*android:name=".*[Kk]ey.*".*android:value="[^"]{10,}"'''
+          tags = ["Android", "Manifest", "API", "mobile"]
+          
+          [[rules]]
+          description = "Android Secret Properties"
+          regex = '''(?i)(sdk\.dir|ndk\.dir|android\.home)[\s]*[=:][\s]*["'].*secret.*["']'''
+          tags = ["Android", "SDK", "NDK", "path"]
+          
+          # ========== iOS / SWIFT ==========
+          [[rules]]
+          description = "iOS Info.plist Secrets"
+          regex = '''<key>.*[Ss]ecret.*</key>\s*<string>[^<]{10,}</string>'''
+          tags = ["iOS", "Info.plist", "mobile", "Apple"]
+          
+          [[rules]]
+          description = "iOS API Keys in Swift"
+          regex = '''(?i)(let|var).*(ApiKey|Secret|Token|Password)[\s]*=[\s]*["'][^"']{10,}["']'''
+          tags = ["iOS", "Swift", "mobile", "API"]
+          
+          [[rules]]
+          description = "iOS App Transport Security Exceptions"
+          regex = '''<key>NSExceptionDomains</key>.*<key>.*</key>.*<key>NSIncludesSubdomains</key>'''
+          tags = ["iOS", "ATS", "security", "configuration"]
+          
+          [[rules]]
+          description = "iOS Keychain Access Groups"
+          regex = '''<key>keychain-access-groups</key>.*<string>.*</string>'''
+          tags = ["iOS", "Keychain", "security", "mobile"]
+          
+          [[rules]]
+          description = "iOS Provisioning Profile References"
+          regex = '''PROVISIONING_PROFILE.*=.*[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{12}'''
+          tags = ["iOS", "provisioning", "profile", "mobile"]
+          
+          [[rules]]
+          description = "iOS Firebase Plist Secrets"
+          regex = '''GoogleService-Info\.plist.*<string>[A-Za-z0-9_\-]{20,}</string>'''
+          tags = ["iOS", "Firebase", "Google", "mobile"]
+          
+          # ========== MOBILE APPS (Cross-platform) ==========
+          [[rules]]
+          description = "Mobile App Configuration Files"
+          regex = '''(?i)(google-services\.json|GoogleService-Info\.plist|app\.json|Info\.plist).*["'][A-Za-z0-9_\-]{20,}["']'''
+          tags = ["mobile", "Firebase", "config", "iOS", "Android"]
+          
+          [[rules]]
+          description = "App Center Secrets"
+          regex = '''(?i)(appcenter|codepush)[\s]*[=:][\s]*["'][^"']{20,}["']'''
+          tags = ["mobile", "AppCenter", "CodePush", "iOS", "Android"]
+          
+          [[rules]]
+          description = "Mobile Analytics Keys"
+          regex = '''(?i)(mixpanel|amplitude|segment|braze|adjust).*[Kk]ey[^=]*=[^=]*["'][^"']{10,}["']'''
+          tags = ["mobile", "analytics", "tracking", "iOS", "Android"]
+          
+          [[rules]]
+          description = "Mobile Push Notification Keys"
+          regex = '''(?i)(apns|fcm|gcm|push).*[Kk]ey[^=]*=[^=]*["'][^"']{10,}["']'''
+          tags = ["mobile", "push", "notifications", "iOS", "Android"]
+          
+          # ========== CI/CD FOR MOBILE ==========
+          [[rules]]
+          description = "Mobile CI/CD Secrets"
+          regex = '''(?i)(fastlane|match|gym|scan).*[_-](key|password|token|secret)[\s]*[=:][\s]*["'][^"']{8,}["']'''
+          tags = ["mobile", "CI/CD", "Fastlane", "iOS", "Android"]
+          
+          [[rules]]
+          description = "Apple Developer Credentials"
+          regex = '''(?i)(apple[_-]id|itunes[_-]connect|appstore[_-]connect).*[=:][\s]*["'][^"']{8,}["']'''
+          tags = ["iOS", "Apple", "AppStore", "developer"]
+          
+          [[rules]]
+          description = "Android Signing Keystore References"
+          regex = '''(?i)signingConfig.*storeFile.*[=:][\s]*["'].*\.jks["']'''
+          tags = ["Android", "signing", "keystore", "CI/CD"]
+          
+          # ========== ENCRYPTION KEYS ==========
+          [[rules]]
+          description = "Encryption Keys"
+          regex = '''(?i)(encryption\.key|aes\.key|secret\.key)[\s]*[=:][\s]*["'][^"']{16,}["']'''
+          tags = ["encryption", "key", "crypto"]
+          
+          # ========== WEBHOOKS ==========
+          [[rules]]
+          description = "Webhook Secrets"
+          regex = '''(?i)(webhook.*secret|secret.*webhook)[\s]*[=:][\s]*["'][^"']{10,}["']'''
+          tags = ["webhook", "secret", "callback"]
+          
+          # ========== API SPECIFIC ==========
+          [[rules]]
+          description = "Stripe API Key"
+          regex = '''(sk|pk)_(test|live)_[0-9a-zA-Z]{24}'''
+          tags = ["key", "Stripe", "payment", "mobile"]
+          
+          [[rules]]
+          description = "Google API Key"
+          regex = '''AIza[0-9A-Za-z\-_]{35}'''
+          tags = ["key", "Google", "API", "mobile", "Android", "iOS"]
+          
+          [[rules]]
+          description = "Google OAuth Token"
+          regex = '''ya29\.[0-9A-Za-z\-_]+'''
+          tags = ["token", "Google", "OAuth", "mobile"]
+          
+          [[rules]]
+          description = "Twilio API Key"
+          regex = '''SK[0-9a-fA-F]{32}'''
+          tags = ["Twilio", "API", "key", "mobile"]
+          
+          [[rules]]
+          description = "SendGrid API Key"
+          regex = '''SG\.[A-Za-z0-9-_]{22}\.[A-Za-z0-9-_]{43}'''
+          tags = ["SendGrid", "email", "API", "mobile"]
+          
+          [rules.allowlist]
+          description = "Allow listed files and paths"
+          paths = [
+            "package-lock.json",
+            "yarn.lock",
+            "go.sum",
+            "Pipfile.lock",
+            "poetry.lock",
+            "*.min.js",
+            "*.min.css",
+            "*.map",
+            "dist/",
+            "build/",
+            "node_modules/",
+            "target/",
+            ".gradle/",
+            ".m2/",
+            "Pods/",  # iOS CocoaPods
+            "DerivedData/",  # iOS build
+            ".android/",  # Android cache
+            ".gradle/",  # Android Gradle
+            "ios/build/"  # iOS build
+          ]
+          
+          commits = [
+            # Add specific commit hashes to allowlist if needed
+          ]
+          
+          regexes = [
+            # Allow specific patterns
+            '''test.*password''',
+            '''example.*key''',
+            '''dummy.*secret''',
+            '''placeholder.*token''',
+            '''sample.*api''',
+            '''demo.*secret'''
+          ]
+          EOF
 
-    - upload: $(Build.ArtifactStagingDirectory)
-      artifact: drop
+    - task: Bash@3
+      displayName: 'Run Enhanced GitLeaks Scan (Current Code)'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo "=========================================="
+          echo "🚀 ENHANCED GITLEAKS SECURITY SCAN"
+          echo "=========================================="
+          echo "Scanning for: Angular, Java, Spring Boot, Quarkus"
+          echo "               Dart, Flutter, OpenShift"
+          echo "               Oracle Database, Android, iOS"
+          echo "=========================================="
+          echo "Scanning directory: $(System.DefaultWorkingDirectory)"
+          echo "Branch: $(Build.SourceBranchName)"
+          echo "=========================================="
+          
+          # Create summary report
+          echo "##vso[task.setvariable variable=GITLEAKS_FAILED]false"
+          
+          echo "=== Running Enhanced GitLeaks Scan on Current Codebase ==="
+          gitleaks detect --source . --config .gitleaks.toml --report-format json --report-path gitleaks-current-report.json --verbose --redact
+          GITLEAKS_EXIT_CODE=$?
+          
+          echo "GitLeaks exit code: $GITLEAKS_EXIT_CODE"
+          
+          if [ -f "gitleaks-current-report.json" ]; then
+            echo "=== GitLeaks Current Scan Results ==="
+            FINDINGS_COUNT=$(cat gitleaks-current-report.json | python -c "import json, sys; data = json.load(sys.stdin); print(len(data)) if isinstance(data, list) else print(0)")
+            echo "Total findings in current code: $FINDINGS_COUNT"
+            
+            # Categorize findings by technology
+            if [ $FINDINGS_COUNT -gt 0 ]; then
+              echo "##vso[task.setvariable variable=GITLEAKS_FAILED]true"
+              
+              cat gitleaks-current-report.json | python -c "
+              import json, sys, collections
+              
+              try:
+                  data = json.load(sys.stdin)
+                  if not isinstance(data, list):
+                      print('No findings in current code')
+                      sys.exit(0)
+                      
+                  print('🔴 CRITICAL: SECRETS FOUND IN CURRENT CODEBASE')
+                  print('=' * 60)
+                  
+                  # Categorize by technology
+                  tech_categories = {
+                      'mobile': ['Android', 'iOS', 'mobile', 'Flutter', 'Firebase'],
+                      'database': ['Oracle', 'MongoDB', 'database', 'JDBC'],
+                      'java': ['Java', 'SpringBoot', 'Quarkus'],
+                      'frontend': ['Angular', 'frontend'],
+                      'openshift': ['OpenShift', 'Kubernetes'],
+                      'api': ['API', 'key', 'token'],
+                      'general': ['secret', 'password', 'key']
+                  }
+                  
+                  categorized = {cat: [] for cat in tech_categories.keys()}
+                  categorized['other'] = []
+                  
+                  for finding in data:
+                      tags = finding.get('Tags', [])
+                      matched = False
+                      for cat, keywords in tech_categories.items():
+                          if any(keyword in ' '.join(tags) for keyword in keywords):
+                              categorized[cat].append(finding)
+                              matched = True
+                              break
+                      if not matched:
+                          categorized['other'].append(finding)
+                  
+                  # Print summary by technology
+                  print('\n📊 FINDINGS BY TECHNOLOGY STACK:')
+                  for category, items in sorted(categorized.items()):
+                      if items:
+                          print(f'   🔸 {category.upper()}: {len(items)} findings')
+                  
+                  # Print mobile-specific findings
+                  if categorized['mobile']:
+                      print('\n📱 MOBILE SPECIFIC FINDINGS:')
+                      mobile_types = {'Android': 0, 'iOS': 0, 'Flutter': 0, 'Firebase': 0}
+                      for finding in categorized['mobile']:
+                          tags = finding.get('Tags', [])
+                          if 'Android' in tags:
+                              mobile_types['Android'] += 1
+                          if 'iOS' in tags:
+                              mobile_types['iOS'] += 1
+                          if 'Flutter' in tags:
+                              mobile_types['Flutter'] += 1
+                          if 'Firebase' in tags:
+                              mobile_types['Firebase'] += 1
+                      
+                      for platform, count in mobile_types.items():
+                          if count > 0:
+                              print(f'   📲 {platform}: {count} findings')
+                  
+                  # Print database findings
+                  if categorized['database']:
+                      print('\n🗄️ DATABASE FINDINGS:')
+                      db_types = {'Oracle': 0, 'MongoDB': 0}
+                      for finding in categorized['database']:
+                          tags = finding.get('Tags', [])
+                          if 'Oracle' in tags:
+                              db_types['Oracle'] += 1
+                          if 'MongoDB' in tags:
+                              db_types['MongoDB'] += 1
+                      
+                      for db, count in db_types.items():
+                          if count > 0:
+                              print(f'   💾 {db}: {count} findings')
+                  
+                  # Print detailed findings (limited)
+                  print('\n🔍 TOP 10 FINDINGS DETAILS:')
+                  for i, finding in enumerate(data[:10]):
+                      print(f'\n{i+1}. 🚨 {finding.get(\"Description\", \"Unknown\")}')
+                      print(f'   📁 File: {finding.get(\"File\", \"Unknown\")}')
+                      print(f'   📍 Line: {finding.get(\"StartLine\", \"N/A\")}')
+                      tags = finding.get(\"Tags\", [])
+                      tech_tags = [tag for tag in tags if tag in ['Android', 'iOS', 'Oracle', 'Java', 'Angular', 'Flutter', 'SpringBoot', 'Quarkus', 'OpenShift']]
+                      if tech_tags:
+                          print(f'   🏷️  Tech: {\", \".join(tech_tags)}')
+                      print(f'   ⚠️  Entropy: {finding.get(\"Entropy\", \"N/A\")}')
+                      match = finding.get(\"Match\", \"\")
+                      if len(match) > 100:
+                          match = match[:100] + '...'
+                      print(f'   🔑 Match: {match}')
+                      
+                  if len(data) > 10:
+                      print(f'\n⚠️  ... and {len(data) - 10} more findings')
+                      
+                  # Save summary for pipeline
+                  with open('gitleaks-summary.txt', 'w') as f:
+                      f.write(f'Total Findings: {len(data)}\\n')
+                      f.write('\\nBy Technology:\\n')
+                      for category, items in categorized.items():
+                          if items:
+                              f.write(f'{category}: {len(items)}\\n')
+                      if categorized['mobile']:
+                          f.write('\\nMobile Breakdown:\\n')
+                          mobile_types = {'Android': 0, 'iOS': 0, 'Flutter': 0}
+                          for finding in categorized['mobile']:
+                              tags = finding.get('Tags', [])
+                              if 'Android' in tags:
+                                  mobile_types['Android'] += 1
+                              if 'iOS' in tags:
+                                  mobile_types['iOS'] += 1
+                              if 'Flutter' in tags:
+                                  mobile_types['Flutter'] += 1
+                          for platform, count in mobile_types.items():
+                              if count > 0:
+                                  f.write(f'  {platform}: {count}\\n')
+                          
+              except Exception as e:
+                  print(f'Error processing results: {str(e)}')
+              "
+              
+              echo "##vso[task.logissue type=error]GitLeaks found $FINDINGS_COUNT potential secrets in current code"
+              
+            else
+              echo "✅ No secrets found in current code"
+              echo "##vso[task.complete result=Succeeded]"
+            fi
+          else
+            echo "No GitLeaks report generated for current code"
+          fi
 
-- stage: Deploy
-  displayName: Deploy stage
-  dependsOn: Build
-  condition: succeeded()
-  jobs:
-  - deployment: DeployLinuxWebApp
-    displayName: Deploy Linux Web App
-    environment: $(environmentName)
-    pool: 
-      vmImage: $(vmImageName)
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - task: AzureWebApp@1
-            displayName: 'Azure Web App Deploy: hello-world-rest-api-in28minutes'
-            inputs:
-              azureSubscription: $(azureSubscription)
-              appType: webAppLinux
-              appName: $(webAppName)
-              package: '$(Pipeline.Workspace)/drop/**/target/*.?(war|jar)'
+    - task: Bash@3
+      displayName: 'Run GitLeaks Scan (Git History)'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo "=== Running GitLeaks Scan on Git History ==="
+          
+          gitleaks detect --source . --config .gitleaks.toml --report-format json --report-path gitleaks-history-report.json --verbose --redact
+          GITLEAKS_HISTORY_EXIT_CODE=$?
+          
+          echo "GitLeaks history exit code: $GITLEAKS_HISTORY_EXIT_CODE"
+          
+          if [ -f "gitleaks-history-report.json" ]; then
+            echo "=== GitLeaks History Scan Results ==="
+            HISTORY_FINDINGS_COUNT=$(cat gitleaks-history-report.json | python -c "import json, sys; data = json.load(sys.stdin); print(len(data)) if isinstance(data, list) else print(0)")
+            echo "Total findings in git history: $HISTORY_FINDINGS_COUNT"
+            
+            if [ $HISTORY_FINDINGS_COUNT -gt 0 ]; then
+              echo "##vso[task.logissue type=warning]GitLeaks found $HISTORY_FINDINGS_COUNT potential secrets in git history"
+              
+              cat gitleaks-history-report.json | python -c "
+                import json, sys
+                try:
+                    data = json.load(sys.stdin)
+                    if not isinstance(data, list):
+                        print('No findings in history')
+                        sys.exit(0)
+                        
+                    print('🔴 HISTORICAL SECRETS FOUND IN GIT HISTORY:')
+                    print('=' * 60)
+                    
+                    # Analyze by technology
+                    mobile_history = [f for f in data if any(tag in str(f.get('Tags', [])) for tag in ['Android', 'iOS', 'mobile'])]
+                    oracle_history = [f for f in data if 'Oracle' in str(f.get('Tags', []))]
+                    
+                    print(f'Total historical findings: {len(data)}')
+                    if mobile_history:
+                        print(f'📱 Mobile-related historical secrets: {len(mobile_history)}')
+                    if oracle_history:
+                        print(f'🗄️ Oracle-related historical secrets: {len(oracle_history)}')
+                    
+                    # Group by commit
+                    commits = {}
+                    for finding in data:
+                        commit = finding.get('Commit', 'Unknown')[:8]
+                        if commit not in commits:
+                            commits[commit] = []
+                        commits[commit].append(finding)
+                    
+                    print(f'\\nFound secrets in {len(commits)} commits')
+                    
+                    # Show top 3 commits with most findings
+                    sorted_commits = sorted(commits.items(), key=lambda x: len(x[1]), reverse=True)
+                    
+                    for i, (commit, findings) in enumerate(sorted_commits[:3]):
+                        print(f'\\n{i+1}. Commit: {commit}')
+                        print(f'   Findings: {len(findings)}')
+                        print(f'   Date: {findings[0].get(\"Date\", \"Unknown\")}')
+                        print(f'   Author: {findings[0].get(\"Author\", \"Unknown\")}')
+                        
+                        # Check if this commit has mobile or Oracle secrets
+                        mobile_in_commit = [f for f in findings if any(tag in str(f.get('Tags', [])) for tag in ['Android', 'iOS', 'mobile'])]
+                        oracle_in_commit = [f for f in findings if 'Oracle' in str(f.get('Tags', []))]
+                        
+                        if mobile_in_commit:
+                            print(f'   📱 Contains {len(mobile_in_commit)} mobile secrets')
+                        if oracle_in_commit:
+                            print(f'   🗄️ Contains {len(oracle_in_commit)} Oracle secrets')
+                        
+                        print(f'   Sample finding: {findings[0].get(\"Description\", \"Unknown\")}')
+                    
+                    if len(commits) > 3:
+                        print(f'\\n... and {len(commits) - 3} more commits with historical secrets')
+                        
+                except Exception as e:
+                    print(f'Error processing history results: {str(e)}')
+                "
+            else
+              echo "✅ No secrets found in git history"
+            fi
+          else
+            echo "No GitLeaks report generated for history"
+          fi
+
+    - task: Bash@3
+      displayName: 'Generate Security Report'
+      condition: always()
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Generate final summary report
+          echo "=========================================="
+          echo "📋 SECURITY SCAN SUMMARY"
+          echo "=========================================="
+          
+          if [ -f "gitleaks-summary.txt" ]; then
+            cat gitleaks-summary.txt
+            echo "=========================================="
+          fi
+          
+          if [ "${GITLEAKS_FAILED}" == "true" ]; then
+            echo "❌ SECURITY SCAN FAILED: Secrets detected in codebase"
+            echo "Please review the findings and remove any hardcoded secrets."
+            echo "Consider using environment variables or secret management tools."
+            exit 1
+          else
+            echo "✅ SECURITY SCAN PASSED: No secrets detected in current code"
+            echo "Note: Historical findings may still exist in git history."
+          fi
